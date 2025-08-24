@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Highlight Saver</title>
+    <link rel="stylesheet" href="popup.css">
+    <style>
+        html, body {
+            width: 450px !important;
+            min-width: 450px !important;
+            max-width: 450px !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">Highlights</h1>
+            <div class="header-actions">
+                <button id="exportBtn" class="btn btn-secondary" title="Export highlights">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7,10 12,15 17,10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                </button>
+                <button id="importBtn" class="btn btn-secondary" title="Import highlights">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17,8 12,3 7,8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="search-container">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search highlights...">
+        </div>
+
+        <div class="highlights-container">
+            <div id="highlightsList" class="highlights-list">
+                <!-- Highlights will be populated here -->
+            </div>
+            
+            <div id="emptyState" class="empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M9 12l2 2 4-4"/>
+                    <path d="M21 12c-1 0-3-1-3-3s2-3 3-3 3 1 3 3-2 3-3 3z"/>
+                    <path d="M3 12c1 0 3-1 3-3s-2-3-3-3-3 1-3 3 2 3 3 3z"/>
+                    <path d="M12 3c0 1-1 3-3 3s-3-2-3-3 1-3 3-3 3 2 3 3z"/>
+                    <path d="M12 21c0-1 1-3 3-3s3 2 3 3-1 3-3 3-3-2-3-3z"/>
+                </svg>
+                <h3>No highlights yet</h3>
+                <p>Select text on any webpage to save highlights</p>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <div class="stats">
+                <span id="highlightCount">0 highlights</span>
+            </div>
+            <div class="footer-actions">
+                <button id="clearAllBtn" class="btn btn-danger" title="Clear all highlights">
+                    Clear All
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Hidden file input for import -->
+    <input type="file" id="fileInput" accept=".json" style="display: none;">
+    
+    <script src="popup.js"></script>
+</body>
+</html>
