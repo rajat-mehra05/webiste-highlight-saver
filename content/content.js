@@ -42,6 +42,9 @@ class HighlightSaver {
         this.markExistingHighlights();
       }
     });
+
+    // Handle URL fragments for scroll-to-text functionality
+    this.handleUrlFragment();
   }
 
   handleTextSelection(event) {
@@ -69,6 +72,15 @@ class HighlightSaver {
     const range = selection.getRangeAt(0);
     const pageInfo = this.getPageInfo();
 
+    // Get text position for scroll-to functionality
+    const rect = range.getBoundingClientRect();
+    const textPosition = {
+      top: rect.top + window.scrollY,
+      left: rect.left + window.scrollX,
+      width: rect.width,
+      height: rect.height,
+    };
+
     this.pendingHighlight = {
       text: selectedText,
       range: {
@@ -80,6 +92,7 @@ class HighlightSaver {
       },
       pageInfo: pageInfo,
       surroundingText: this.getSurroundingTextFromRange(range),
+      textPosition: textPosition,
       timestamp: Date.now(),
     };
   }
@@ -421,6 +434,7 @@ Provide a concise summary that captures the key points:`;
         domain: this.pendingHighlight.pageInfo.domain,
         timestamp: this.pendingHighlight.timestamp,
         pageText: this.pendingHighlight.surroundingText,
+        textPosition: this.pendingHighlight.textPosition,
       };
 
       // Save to storage
@@ -432,6 +446,12 @@ Provide a concise summary that captures the key points:`;
 
         // Clear pending data
         this.pendingHighlight = null;
+
+        // Clear text selection to prevent popup from reappearing
+        const selection = window.getSelection();
+        if (selection) {
+          selection.removeAllRanges();
+        }
 
         // Remove popup
         this.removePopup();
@@ -739,6 +759,149 @@ Provide a concise summary that captures the key points:`;
         feedback.remove();
       }
     }, 3000);
+  }
+
+  handleUrlFragment() {
+    const hash = window.location.hash;
+    if (hash && hash.includes("highlight=")) {
+      const params = new URLSearchParams(hash.substring(1));
+      const highlightText = params.get("highlight");
+      const positionData = params.get("pos");
+
+      if (highlightText) {
+        // Wait for page to load completely and try multiple times
+        let attempts = 0;
+        const maxAttempts = 5;
+
+        const tryScroll = () => {
+          attempts++;
+          if (
+            document.body &&
+            document.body.textContent.includes(highlightText)
+          ) {
+            this.scrollToAndHighlightText(highlightText, positionData);
+          } else if (attempts < maxAttempts) {
+            setTimeout(tryScroll, 500);
+          }
+        };
+
+        setTimeout(tryScroll, 500);
+      }
+    }
+  }
+
+  scrollToAndHighlightText(text, positionData) {
+    try {
+      // Try to find the text on the page
+      const textNodes = [];
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+      );
+
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.textContent.includes(text)) {
+          textNodes.push(node);
+        }
+      }
+
+      if (textNodes.length > 0) {
+        // Find the best match (exact match or closest)
+        let bestMatch = textNodes[0];
+        let bestScore = 0;
+
+        textNodes.forEach((textNode) => {
+          const content = textNode.textContent;
+          const index = content.indexOf(text);
+          if (index !== -1) {
+            const score = text.length / content.length; // Higher score for more exact matches
+            if (score > bestScore) {
+              bestScore = score;
+              bestMatch = textNode;
+            }
+          }
+        });
+
+        // Create range and scroll to it
+        const range = document.createRange();
+        const content = bestMatch.textContent;
+        const index = content.indexOf(text);
+
+        range.setStart(bestMatch, index);
+        range.setEnd(bestMatch, index + text.length);
+
+        // Get the bounding rect and scroll
+        const rect = range.getBoundingClientRect();
+        const scrollTop = rect.top + window.scrollY - 100; // 100px offset
+
+        window.scrollTo({
+          top: scrollTop,
+          behavior: "smooth",
+        });
+
+        // Temporarily highlight the text
+        this.temporarilyHighlightText(range, text);
+
+        // Show feedback
+        this.showFeedback("Scrolled to highlighted text!", "#10b981");
+      } else {
+        // Fallback: try to use position data if available
+        if (positionData) {
+          try {
+            const position = JSON.parse(decodeURIComponent(positionData));
+            window.scrollTo({
+              top: position.top - 100,
+              behavior: "smooth",
+            });
+            this.showFeedback("Scrolled to approximate position", "#f59e0b");
+          } catch (e) {
+            console.error("Failed to parse position data:", e);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Failed to scroll to text:", error);
+    }
+  }
+
+  temporarilyHighlightText(range, text) {
+    try {
+      // Create a temporary highlight overlay
+      const highlight = document.createElement("div");
+      highlight.className = "temporary-highlight";
+      Object.assign(highlight.style, {
+        position: "absolute",
+        backgroundColor: "rgba(255, 255, 0, 0.3)",
+        border: "2px solid #fbbf24",
+        borderRadius: "2px",
+        pointerEvents: "none",
+        zIndex: "2147483645",
+        animation: "pulse 2s ease-in-out",
+      });
+
+      // Position the highlight
+      const rect = range.getBoundingClientRect();
+      Object.assign(highlight.style, {
+        top: `${rect.top + window.scrollY}px`,
+        left: `${rect.left + window.scrollX}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+      });
+
+      document.body.appendChild(highlight);
+
+      // Remove the highlight after 3 seconds
+      setTimeout(() => {
+        if (highlight.parentNode) {
+          highlight.remove();
+        }
+      }, 3000);
+    } catch (error) {
+      console.error("Failed to create temporary highlight:", error);
+    }
   }
 
   showSummaryPopup(summary) {

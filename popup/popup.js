@@ -180,9 +180,14 @@ class PopupUI {
     div.appendChild(meta);
     div.appendChild(actions);
 
-    // Click to open the page
+    // Click to open the page with position data
     div.addEventListener("click", () => {
-      chrome.tabs.create({ url: highlight.url });
+      const url = highlight.textPosition
+        ? `${highlight.url}#highlight=${encodeURIComponent(
+            highlight.text
+          )}&pos=${encodeURIComponent(JSON.stringify(highlight.textPosition))}`
+        : highlight.url;
+      chrome.tabs.create({ url });
     });
 
     return div;
