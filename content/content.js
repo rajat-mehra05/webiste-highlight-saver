@@ -1,9 +1,7 @@
 // Content script for text highlighting functionality
-console.log("Content script file loaded!");
 
 class HighlightSaver {
   constructor() {
-    console.log("HighlightSaver constructor called");
     this.currentPopup = null;
     this.savedHighlights = new Map();
     this.pendingHighlight = null; // Store highlight data when popup is shown
@@ -11,8 +9,6 @@ class HighlightSaver {
   }
 
   async init() {
-    console.log("Initializing Highlight Saver...");
-
     try {
       this.bindEvents();
 
@@ -30,8 +26,6 @@ class HighlightSaver {
       console.error("Error during initialization:", error);
       this.savedHighlightsData = [];
     }
-
-    console.log("Highlight Saver initialization complete");
   }
 
   bindEvents() {
@@ -54,15 +48,11 @@ class HighlightSaver {
     const selection = window.getSelection();
     const selectedText = selection.toString().trim();
 
-    console.log("Text selection detected:", selectedText);
-    console.log("Current popup exists:", !!this.currentPopup);
-
     // Remove existing popup
     this.removePopup();
 
     // Show popup if text is selected
     if (selectedText.length > 0 && selectedText.length < 1000) {
-      console.log("Showing save popup for:", selectedText);
       // Store the selection data immediately before it gets cleared
       this.storeSelectionData(selection, selectedText);
       // Add small delay to ensure DOM is ready
@@ -70,7 +60,6 @@ class HighlightSaver {
         this.showSavePopup(selectedText, event);
       }, 50);
     } else if (selectedText.length === 0) {
-      console.log("No text selected, not showing popup");
       this.pendingHighlight = null;
     }
   }
@@ -93,20 +82,15 @@ class HighlightSaver {
       surroundingText: this.getSurroundingTextFromRange(range),
       timestamp: Date.now(),
     };
-
-    console.log("Stored selection data:", this.pendingHighlight);
   }
 
   handleOutsideClick(event) {
     if (this.currentPopup && !this.currentPopup.contains(event.target)) {
-      console.log("Clicked outside popup, removing...");
       this.removePopup();
     }
   }
 
   showSavePopup(selectedText, event) {
-    console.log("Creating save popup...");
-
     // Create popup element
     const popup = document.createElement("div");
     popup.id = "highlight-saver-popup-unique";
@@ -167,7 +151,6 @@ class HighlightSaver {
 
     // Add event listeners with explicit binding
     const saveHandler = (e) => {
-      console.log("=== SAVE BUTTON CLICKED ===");
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -175,22 +158,31 @@ class HighlightSaver {
     };
 
     const cancelHandler = (e) => {
-      console.log("=== CANCEL BUTTON CLICKED ===");
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      this.handleCancelClick();
+
+      // Clear pending data
+      this.pendingHighlight = null;
+
+      // Use centralized cleanup method
+      this.removePopup();
+
+      // Additional cleanup: clear text selection to prevent new popup
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+      }
     };
 
     const summarizeHandler = (e) => {
-      console.log("=== SUMMARIZE BUTTON CLICKED ===");
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       this.handleSummarizeClick();
     };
 
-    // Add multiple event types for better compatibility
+    // Add event listeners for better compatibility
     saveButton.addEventListener("click", saveHandler, true);
     saveButton.addEventListener("mousedown", saveHandler, true);
 
@@ -207,28 +199,19 @@ class HighlightSaver {
 
     // Hover effects are now handled by CSS
 
-    console.log("Adding popup to DOM...");
     document.body.appendChild(popup);
     this.currentPopup = popup;
-
-    console.log("Popup created successfully");
-    console.log("Save button:", saveButton);
-    console.log("Cancel button:", cancelButton);
-    console.log("Popup in DOM:", document.body.contains(popup));
 
     // Auto-remove after 10 seconds as failsafe
     setTimeout(() => {
       if (this.currentPopup === popup) {
-        console.log("Auto-removing popup after timeout");
         this.removePopup();
       }
     }, 10000);
   }
 
   handleSaveClick() {
-    console.log("=== handleSaveClick called ===");
     if (this.pendingHighlight) {
-      console.log("Processing save with pending highlight data");
       this.saveHighlightFromPending();
     } else {
       console.error("No pending highlight data to save");
@@ -237,15 +220,11 @@ class HighlightSaver {
   }
 
   handleCancelClick() {
-    console.log("=== handleCancelClick called ===");
     this.pendingHighlight = null;
     this.removePopup();
-    console.log("Popup removed and pending data cleared");
   }
 
   async handleSummarizeClick() {
-    console.log("=== handleSummarizeClick called ===");
-
     if (!this.pendingHighlight) {
       console.error("No pending highlight data to summarize");
       this.showErrorFeedback("No highlight data found");
@@ -361,8 +340,6 @@ Provide a concise summary that captures the key points:`;
 
   removePopup() {
     if (this.currentPopup) {
-      console.log("Removing popup from DOM");
-
       // Clean up event listeners
       const saveBtn = this.currentPopup.querySelector(
         "#highlight-save-btn-unique"
@@ -409,24 +386,30 @@ Provide a concise summary that captures the key points:`;
         );
       }
 
+      // Clean up any potential inline handlers
+      if (saveBtn) saveBtn.onclick = null;
+      if (cancelBtn) cancelBtn.onclick = null;
+      if (summarizeBtn) summarizeBtn.onclick = null;
+
       this.currentPopup.remove();
       this.currentPopup = null;
-      console.log("Popup removed successfully");
-    } else {
-      console.log("No popup to remove");
+    }
+
+    // Fallback: also try to remove by ID in case reference is lost
+    const popupElement = document.getElementById(
+      "highlight-saver-popup-unique"
+    );
+    if (popupElement) {
+      popupElement.remove();
     }
   }
 
   async saveHighlightFromPending() {
-    console.log("=== saveHighlightFromPending called ===");
-
     if (!this.pendingHighlight) {
       console.error("No pending highlight data");
       this.showErrorFeedback("No highlight data found");
       return;
     }
-
-    console.log("Pending highlight data:", this.pendingHighlight);
 
     try {
       // Create highlight object from stored data
@@ -440,16 +423,10 @@ Provide a concise summary that captures the key points:`;
         pageText: this.pendingHighlight.surroundingText,
       };
 
-      console.log("Created highlight object:", highlight);
-
       // Save to storage
-      console.log("Attempting to save to storage...");
       const result = await this.saveToStorage(highlight);
-      console.log("Storage result:", result);
 
       if (result && result.success) {
-        console.log("Successfully saved to storage");
-
         // Mark text as saved using stored range data
         this.markTextAsSavedFromPending(highlight.id);
 
@@ -511,9 +488,7 @@ Provide a concise summary that captures the key points:`;
 
       range.surroundContents(span);
       this.savedHighlights.set(highlightId, span);
-      console.log("Successfully marked text as saved");
     } catch (rangeError) {
-      console.log("surroundContents failed, using fallback method");
       // Fallback: manually extract and wrap content
       this.markRangeWithFallback(range, highlightId);
     }
@@ -543,7 +518,6 @@ Provide a concise summary that captures the key points:`;
       range.collapse(true);
 
       this.savedHighlights.set(highlightId, span);
-      console.log("Successfully marked text as saved (fallback method)");
     } catch (fallbackError) {
       console.error("Fallback marking also failed:", fallbackError);
       // Last resort: just clear the selection
@@ -578,9 +552,6 @@ Provide a concise summary that captures the key points:`;
   }
 
   async saveToStorage(highlight) {
-    console.log("=== saveToStorage called ===");
-    console.log("Highlight to save:", highlight);
-
     // Check if Chrome APIs are available
     if (typeof chrome === "undefined" || !chrome.runtime) {
       console.error("Chrome runtime not available");
@@ -588,8 +559,6 @@ Provide a concise summary that captures the key points:`;
     }
 
     return new Promise((resolve, reject) => {
-      console.log("Sending message to background script...");
-
       const timeoutId = setTimeout(() => {
         console.error("Background script response timeout");
         reject(new Error("Response timeout"));
@@ -603,13 +572,11 @@ Provide a concise summary that captures the key points:`;
           },
           (response) => {
             clearTimeout(timeoutId);
-            console.log("Received response from background:", response);
 
             if (chrome.runtime.lastError) {
               console.error("Chrome runtime error:", chrome.runtime.lastError);
               reject(chrome.runtime.lastError);
             } else {
-              console.log("Successfully resolved saveToStorage");
               resolve(response);
             }
           }
@@ -731,12 +698,10 @@ Provide a concise summary that captures the key points:`;
   }
 
   showSuccessFeedback() {
-    console.log("Showing success feedback");
     this.showFeedback("Highlight saved!", "#10b981");
   }
 
   showErrorFeedback(message = "Failed to save highlight") {
-    console.log("Showing error feedback:", message);
     this.showFeedback(message, "#ef4444");
   }
 
@@ -806,6 +771,16 @@ Provide a concise summary that captures the key points:`;
         maxWidth: "300px",
         minWidth: "250px",
       });
+    } else {
+      // Fallback positioning when selection is cleared
+      Object.assign(summaryPopup.style, {
+        position: "fixed",
+        top: "20px",
+        right: "20px",
+        zIndex: "2147483647",
+        maxWidth: "300px",
+        minWidth: "250px",
+      });
     }
 
     // Create summary content
@@ -846,11 +821,9 @@ Provide a concise summary that captures the key points:`;
 try {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
-      console.log("DOM loaded, initializing Highlight Saver");
       new HighlightSaver();
     });
   } else {
-    console.log("DOM already ready, initializing Highlight Saver immediately");
     new HighlightSaver();
   }
 } catch (error) {
