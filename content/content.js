@@ -45,6 +45,11 @@ class HighlightSaver {
 
     // Handle URL fragments for scroll-to-text functionality
     this.handleUrlFragment();
+
+    // Listen for hash changes (SPA-friendly)
+    window.addEventListener("hashchange", () => {
+      this.handleUrlFragment();
+    });
   }
 
   handleTextSelection(event) {
@@ -871,15 +876,11 @@ Provide a concise summary that captures the key points:`;
     try {
       // Create a temporary highlight overlay
       const highlight = document.createElement("div");
-      highlight.className = "temporary-highlight";
+      highlight.className = "highlight-saver-temporary-highlight";
       Object.assign(highlight.style, {
-        position: "absolute",
         backgroundColor: "rgba(255, 255, 0, 0.3)",
         border: "2px solid #fbbf24",
         borderRadius: "2px",
-        pointerEvents: "none",
-        zIndex: "2147483645",
-        animation: "pulse 2s ease-in-out",
       });
 
       // Position the highlight

@@ -181,12 +181,22 @@ class PopupUI {
     div.appendChild(actions);
 
     // Click to open the page with position data
-    div.addEventListener("click", () => {
-      const url = highlight.textPosition
-        ? `${highlight.url}#highlight=${encodeURIComponent(
-            highlight.text
-          )}&pos=${encodeURIComponent(JSON.stringify(highlight.textPosition))}`
-        : highlight.url;
+    div.addEventListener("click", (e) => {
+      // Prevent double-opening if clicking on child elements
+      if (e.target !== div && !div.contains(e.target)) {
+        return;
+      }
+
+      // Preserve existing URL hash and append highlight parameters
+      let url = highlight.url;
+      if (highlight.textPosition) {
+        const separator = url.includes("#") ? "&" : "#";
+        const highlightParams = `highlight=${encodeURIComponent(
+          highlight.text
+        )}&pos=${encodeURIComponent(JSON.stringify(highlight.textPosition))}`;
+        url = `${url}${separator}${highlightParams}`;
+      }
+
       chrome.tabs.create({ url });
     });
 

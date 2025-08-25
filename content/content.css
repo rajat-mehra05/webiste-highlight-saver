@@ -125,7 +125,7 @@
 }
 
 /* Temporary highlight animation */
-@keyframes pulse {
+@keyframes highlight-saver-pulse {
     0% {
         opacity: 0.3;
         transform: scale(1);
@@ -140,8 +140,11 @@
     }
 }
 
-.temporary-highlight {
-    animation: pulse 2s ease-in-out;
+.highlight-saver-temporary-highlight {
+    animation: highlight-saver-pulse 2s ease-in-out !important;
+    position: absolute !important;
+    pointer-events: none !important;
+    z-index: 2147483645 !important;
 }
 
 @keyframes highlightPopupFadeIn {
