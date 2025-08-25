@@ -162,24 +162,13 @@ class HighlightSaver {
       e.stopPropagation();
       e.stopImmediatePropagation();
 
-      // Immediately clear pending data and remove popup
+      // Clear pending data
       this.pendingHighlight = null;
 
-      // Try to remove the popup
-      if (this.currentPopup) {
-        this.currentPopup.remove();
-        this.currentPopup = null;
-      }
+      // Use centralized cleanup method
+      this.removePopup();
 
-      // Fallback: also try to remove by ID
-      const popupElement = document.getElementById(
-        "highlight-saver-popup-unique"
-      );
-      if (popupElement) {
-        popupElement.remove();
-      }
-
-      // Clear the text selection to prevent new popup
+      // Additional cleanup: clear text selection to prevent new popup
       const selection = window.getSelection();
       if (selection) {
         selection.removeAllRanges();
@@ -193,14 +182,12 @@ class HighlightSaver {
       this.handleSummarizeClick();
     };
 
-    // Add multiple event types for better compatibility
+    // Add event listeners for better compatibility
     saveButton.addEventListener("click", saveHandler, true);
     saveButton.addEventListener("mousedown", saveHandler, true);
 
     cancelButton.addEventListener("click", cancelHandler, true);
     cancelButton.addEventListener("mousedown", cancelHandler, true);
-    // Add direct onclick as backup
-    cancelButton.onclick = cancelHandler;
 
     summarizeButton.addEventListener("click", summarizeHandler, true);
     summarizeButton.addEventListener("mousedown", summarizeHandler, true);
@@ -399,8 +386,21 @@ Provide a concise summary that captures the key points:`;
         );
       }
 
+      // Clean up any potential inline handlers
+      if (saveBtn) saveBtn.onclick = null;
+      if (cancelBtn) cancelBtn.onclick = null;
+      if (summarizeBtn) summarizeBtn.onclick = null;
+
       this.currentPopup.remove();
       this.currentPopup = null;
+    }
+
+    // Fallback: also try to remove by ID in case reference is lost
+    const popupElement = document.getElementById(
+      "highlight-saver-popup-unique"
+    );
+    if (popupElement) {
+      popupElement.remove();
     }
   }
 
@@ -767,6 +767,16 @@ Provide a concise summary that captures the key points:`;
         position: "absolute",
         top: `${top}px`,
         left: `${Math.max(20, adjustedLeft)}px`,
+        zIndex: "2147483647",
+        maxWidth: "300px",
+        minWidth: "250px",
+      });
+    } else {
+      // Fallback positioning when selection is cleared
+      Object.assign(summaryPopup.style, {
+        position: "fixed",
+        top: "20px",
+        right: "20px",
         zIndex: "2147483647",
         maxWidth: "300px",
         minWidth: "250px",
