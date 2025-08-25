@@ -124,6 +124,29 @@
     width: 100%;
 }
 
+/* Temporary highlight animation */
+@keyframes highlight-saver-pulse {
+    0% {
+        opacity: 0.3;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.8;
+        transform: scale(1.02);
+    }
+    100% {
+        opacity: 0.3;
+        transform: scale(1);
+    }
+}
+
+.highlight-saver-temporary-highlight {
+    animation: highlight-saver-pulse 2s ease-in-out !important;
+    position: absolute !important;
+    pointer-events: none !important;
+    z-index: 2147483645 !important;
+}
+
 @keyframes highlightPopupFadeIn {
     from {
         opacity: 0;
