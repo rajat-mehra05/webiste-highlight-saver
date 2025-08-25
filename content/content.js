@@ -353,8 +353,6 @@ Provide a concise summary that captures the key points:`;
 
   removePopup() {
     if (this.currentPopup) {
-      console.log("Removing popup from DOM");
-
       // Clean up event listeners
       const saveBtn = this.currentPopup.querySelector(
         "#highlight-save-btn-unique"
@@ -403,22 +401,15 @@ Provide a concise summary that captures the key points:`;
 
       this.currentPopup.remove();
       this.currentPopup = null;
-      console.log("Popup removed successfully");
-    } else {
-      console.log("No popup to remove");
     }
   }
 
   async saveHighlightFromPending() {
-    console.log("=== saveHighlightFromPending called ===");
-
     if (!this.pendingHighlight) {
       console.error("No pending highlight data");
       this.showErrorFeedback("No highlight data found");
       return;
     }
-
-    console.log("Pending highlight data:", this.pendingHighlight);
 
     try {
       // Create highlight object from stored data
@@ -432,16 +423,10 @@ Provide a concise summary that captures the key points:`;
         pageText: this.pendingHighlight.surroundingText,
       };
 
-      console.log("Created highlight object:", highlight);
-
       // Save to storage
-      console.log("Attempting to save to storage...");
       const result = await this.saveToStorage(highlight);
-      console.log("Storage result:", result);
 
       if (result && result.success) {
-        console.log("Successfully saved to storage");
-
         // Mark text as saved using stored range data
         this.markTextAsSavedFromPending(highlight.id);
 
@@ -503,9 +488,7 @@ Provide a concise summary that captures the key points:`;
 
       range.surroundContents(span);
       this.savedHighlights.set(highlightId, span);
-      console.log("Successfully marked text as saved");
     } catch (rangeError) {
-      console.log("surroundContents failed, using fallback method");
       // Fallback: manually extract and wrap content
       this.markRangeWithFallback(range, highlightId);
     }
@@ -535,7 +518,6 @@ Provide a concise summary that captures the key points:`;
       range.collapse(true);
 
       this.savedHighlights.set(highlightId, span);
-      console.log("Successfully marked text as saved (fallback method)");
     } catch (fallbackError) {
       console.error("Fallback marking also failed:", fallbackError);
       // Last resort: just clear the selection
@@ -570,9 +552,6 @@ Provide a concise summary that captures the key points:`;
   }
 
   async saveToStorage(highlight) {
-    console.log("=== saveToStorage called ===");
-    console.log("Highlight to save:", highlight);
-
     // Check if Chrome APIs are available
     if (typeof chrome === "undefined" || !chrome.runtime) {
       console.error("Chrome runtime not available");
@@ -580,8 +559,6 @@ Provide a concise summary that captures the key points:`;
     }
 
     return new Promise((resolve, reject) => {
-      console.log("Sending message to background script...");
-
       const timeoutId = setTimeout(() => {
         console.error("Background script response timeout");
         reject(new Error("Response timeout"));
@@ -595,13 +572,11 @@ Provide a concise summary that captures the key points:`;
           },
           (response) => {
             clearTimeout(timeoutId);
-            console.log("Received response from background:", response);
 
             if (chrome.runtime.lastError) {
               console.error("Chrome runtime error:", chrome.runtime.lastError);
               reject(chrome.runtime.lastError);
             } else {
-              console.log("Successfully resolved saveToStorage");
               resolve(response);
             }
           }
@@ -723,12 +698,10 @@ Provide a concise summary that captures the key points:`;
   }
 
   showSuccessFeedback() {
-    console.log("Showing success feedback");
     this.showFeedback("Highlight saved!", "#10b981");
   }
 
   showErrorFeedback(message = "Failed to save highlight") {
-    console.log("Showing error feedback:", message);
     this.showFeedback(message, "#ef4444");
   }
 
@@ -838,11 +811,9 @@ Provide a concise summary that captures the key points:`;
 try {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => {
-      console.log("DOM loaded, initializing Highlight Saver");
       new HighlightSaver();
     });
   } else {
-    console.log("DOM already ready, initializing Highlight Saver immediately");
     new HighlightSaver();
   }
 } catch (error) {
