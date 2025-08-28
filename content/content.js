@@ -496,7 +496,7 @@ Provide a concise summary that captures the key points:`;
           btn._highlightHandler = null;
         }
         // Clean up any potential inline handlers
-        if (btn) btn.onclick = null;
+        btn?.onclick = null;
       });
 
       this.currentPopup.remove();
