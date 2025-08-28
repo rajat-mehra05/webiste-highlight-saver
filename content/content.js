@@ -5,6 +5,13 @@ class HighlightSaver {
     this.currentPopup = null;
     this.savedHighlights = new Map();
     this.pendingHighlight = null; // Store highlight data when popup is shown
+
+    // Event handling optimization
+    this.selectionTimeout = null;
+    this.lastSelectionTime = 0;
+    this.selectionThrottleDelay = 150; // 150ms debounce
+    this.minSelectionInterval = 100; // 100ms throttle
+
     this.init();
   }
 
@@ -29,12 +36,15 @@ class HighlightSaver {
   }
 
   bindEvents() {
-    // Listen for text selection
-    document.addEventListener("mouseup", (e) => this.handleTextSelection(e));
-    document.addEventListener("keyup", (e) => this.handleTextSelection(e));
+    // Optimized text selection with debouncing and throttling
+    const debouncedSelection = (e) => this.handleTextSelectionDebounced(e);
 
-    // Hide popup when clicking outside
-    document.addEventListener("click", (e) => this.handleOutsideClick(e));
+    // Use passive listeners where possible for better performance
+    document.addEventListener("mouseup", debouncedSelection, { passive: true });
+    document.addEventListener("keyup", debouncedSelection, { passive: true });
+
+    // Hide popup when clicking outside - use capture phase for better performance
+    document.addEventListener("click", (e) => this.handleOutsideClick(e), true);
 
     // Handle page visibility changes
     document.addEventListener("visibilitychange", () => {
@@ -50,6 +60,31 @@ class HighlightSaver {
     window.addEventListener("hashchange", () => {
       this.handleUrlFragment();
     });
+
+    // Cleanup on page unload
+    window.addEventListener("beforeunload", () => {
+      this.cleanup();
+    });
+  }
+
+  handleTextSelectionDebounced(event) {
+    const now = Date.now();
+
+    // Throttle: don't process if too soon after last selection
+    if (now - this.lastSelectionTime < this.minSelectionInterval) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (this.selectionTimeout) {
+      clearTimeout(this.selectionTimeout);
+    }
+
+    // Set new timeout for debouncing
+    this.selectionTimeout = setTimeout(() => {
+      this.handleTextSelection(event);
+      this.lastSelectionTime = Date.now();
+    }, this.selectionThrottleDelay);
   }
 
   handleTextSelection(event) {
@@ -358,56 +393,24 @@ Provide a concise summary that captures the key points:`;
 
   removePopup() {
     if (this.currentPopup) {
-      // Clean up event listeners
-      const saveBtn = this.currentPopup.querySelector(
-        "#highlight-save-btn-unique"
-      );
-      const cancelBtn = this.currentPopup.querySelector(
-        "#highlight-cancel-btn-unique"
-      );
-      const summarizeBtn = this.currentPopup.querySelector(
-        "#highlight-summarize-btn-unique"
-      );
+      // Clean up event listeners more efficiently
+      const buttons = [
+        this.currentPopup.querySelector("#highlight-save-btn-unique"),
+        this.currentPopup.querySelector("#highlight-cancel-btn-unique"),
+        this.currentPopup.querySelector("#highlight-summarize-btn-unique"),
+      ];
 
-      if (saveBtn && saveBtn._highlightHandler) {
-        saveBtn.removeEventListener("click", saveBtn._highlightHandler, true);
-        saveBtn.removeEventListener(
-          "mousedown",
-          saveBtn._highlightHandler,
-          true
-        );
-      }
-
-      if (cancelBtn && cancelBtn._highlightHandler) {
-        cancelBtn.removeEventListener(
-          "click",
-          cancelBtn._highlightHandler,
-          true
-        );
-        cancelBtn.removeEventListener(
-          "mousedown",
-          cancelBtn._highlightHandler,
-          true
-        );
-      }
-
-      if (summarizeBtn && summarizeBtn._highlightHandler) {
-        summarizeBtn.removeEventListener(
-          "click",
-          summarizeBtn._highlightHandler,
-          true
-        );
-        summarizeBtn.removeEventListener(
-          "mousedown",
-          summarizeBtn._highlightHandler,
-          true
-        );
-      }
-
-      // Clean up any potential inline handlers
-      if (saveBtn) saveBtn.onclick = null;
-      if (cancelBtn) cancelBtn.onclick = null;
-      if (summarizeBtn) summarizeBtn.onclick = null;
+      buttons.forEach((btn) => {
+        if (btn && btn._highlightHandler) {
+          // Remove both click and mousedown listeners
+          btn.removeEventListener("click", btn._highlightHandler, true);
+          btn.removeEventListener("mousedown", btn._highlightHandler, true);
+          // Clear the stored handler reference
+          btn._highlightHandler = null;
+        }
+        // Clean up any potential inline handlers
+        if (btn) btn.onclick = null;
+      });
 
       this.currentPopup.remove();
       this.currentPopup = null;
@@ -978,6 +981,24 @@ Provide a concise summary that captures the key points:`;
         this.currentPopup = null;
       }
     }, 15000);
+  }
+
+  // Cleanup method for proper event handler and timeout cleanup
+  cleanup() {
+    // Clear any pending selection timeout
+    if (this.selectionTimeout) {
+      clearTimeout(this.selectionTimeout);
+      this.selectionTimeout = null;
+    }
+
+    // Remove popup if exists
+    this.removePopup();
+
+    // Clear pending highlight data
+    this.pendingHighlight = null;
+
+    // Clear saved highlights map
+    this.savedHighlights.clear();
   }
 }
 
