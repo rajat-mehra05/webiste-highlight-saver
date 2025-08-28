@@ -25,7 +25,16 @@
   "content_scripts": [
     {
       "matches": ["https://*/*"],
-      "js": ["content/content.js"],
+      "js": [
+        "content/utils/cache-manager.js",
+        "content/utils/dom-utils.js",
+        "content/utils/range-utils.js",
+        "content/utils/event-utils.js",
+        "content/utils/ui-utils.js",
+        "content/utils/storage-utils.js",
+        "content/utils/ai-utils.js",
+        "content/content.js"
+      ],
       "css": ["content/content.css"],
       "run_at": "document_end",
       "all_frames": false
