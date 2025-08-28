@@ -5,6 +5,37 @@ class HighlightSaver {
     this.currentPopup = null;
     this.savedHighlights = new Map();
     this.pendingHighlight = null; // Store highlight data when popup is shown
+
+    // Event handling optimization
+    this.selectionTimeout = null;
+    this.lastSelectionTime = 0;
+    this.selectionThrottleDelay = 150; // 150ms debounce
+    this.minSelectionInterval = 100; // 100ms throttle
+
+    // DOM and text search optimization
+    this.domCache = {
+      body: null,
+      existingHighlights: null,
+      lastCacheTime: 0,
+    };
+    this.textNodeCache = new Map();
+    this.lastTextSearchTime = 0;
+    this.cacheValidityDuration = 30000; // 30 seconds
+
+    // Memory management optimization
+    this.maxCacheSize = 100; // Maximum number of cached items
+    this.maxTextNodesCache = 50; // Maximum cached text node searches
+    this.cleanupInterval = null;
+    this.memoryUsage = {
+      cacheSize: 0,
+      lastCleanup: Date.now(),
+    };
+
+    // API optimization
+    this.summaryCache = new Map();
+    this.maxSummaryCacheSize = 20;
+    this.apiRequestQueue = new Map(); // Prevent duplicate requests
+
     this.init();
   }
 
@@ -22,6 +53,9 @@ class HighlightSaver {
         );
         this.savedHighlightsData = [];
       }
+
+      // Start periodic memory cleanup
+      this.startMemoryCleanup();
     } catch (error) {
       console.error("Error during initialization:", error);
       this.savedHighlightsData = [];
@@ -29,12 +63,15 @@ class HighlightSaver {
   }
 
   bindEvents() {
-    // Listen for text selection
-    document.addEventListener("mouseup", (e) => this.handleTextSelection(e));
-    document.addEventListener("keyup", (e) => this.handleTextSelection(e));
+    // Optimized text selection with debouncing and throttling
+    const debouncedSelection = (e) => this.handleTextSelectionDebounced(e);
 
-    // Hide popup when clicking outside
-    document.addEventListener("click", (e) => this.handleOutsideClick(e));
+    // Use passive listeners where possible for better performance
+    document.addEventListener("mouseup", debouncedSelection, { passive: true });
+    document.addEventListener("keyup", debouncedSelection, { passive: true });
+
+    // Hide popup when clicking outside - use capture phase for better performance
+    document.addEventListener("click", (e) => this.handleOutsideClick(e), true);
 
     // Handle page visibility changes
     document.addEventListener("visibilitychange", () => {
@@ -50,6 +87,51 @@ class HighlightSaver {
     window.addEventListener("hashchange", () => {
       this.handleUrlFragment();
     });
+
+    // Cleanup on page unload - use multiple events for better coverage
+    window.addEventListener("beforeunload", () => {
+      this.cleanup();
+    });
+
+    // Backup cleanup for modern browsers and fast navigation
+    window.addEventListener("pagehide", () => {
+      this.cleanup();
+    });
+
+    // Additional cleanup for when the page is being unloaded
+    window.addEventListener("unload", () => {
+      this.cleanup();
+    });
+
+    // Listen for cleanup requests from the extension
+    if (typeof chrome !== "undefined" && chrome.runtime) {
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === "cleanup") {
+          this.cleanup();
+          sendResponse({ success: true });
+        }
+      });
+    }
+  }
+
+  handleTextSelectionDebounced(event) {
+    const now = Date.now();
+
+    // Throttle: don't process if too soon after last selection
+    if (now - this.lastSelectionTime < this.minSelectionInterval) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (this.selectionTimeout) {
+      clearTimeout(this.selectionTimeout);
+    }
+
+    // Set new timeout for debouncing
+    this.selectionTimeout = setTimeout(() => {
+      this.handleTextSelection(event);
+      this.lastSelectionTime = Date.now();
+    }, this.selectionThrottleDelay);
   }
 
   handleTextSelection(event) {
@@ -290,124 +372,164 @@ class HighlightSaver {
 
   async simpleSummarize(highlight) {
     try {
-      // Load config
-      const response = await fetch(chrome.runtime.getURL("env.config"));
-      const envText = await response.text();
-
-      const config = {};
-      const lines = envText.split("\n");
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine && !trimmedLine.startsWith("#")) {
-          const [key, value] = trimmedLine.split("=");
-          if (key && value) {
-            config[key.trim()] = value.trim();
-          }
+      // Check cache first
+      const cacheKey = this.generateSummaryCacheKey(highlight);
+      if (this.summaryCache.has(cacheKey)) {
+        const cached = this.summaryCache.get(cacheKey);
+        if (Date.now() - cached.timestamp < 300000) {
+          // 5 minutes cache
+          return cached.summary;
         }
       }
 
-      const apiKey = config.OPENAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("OpenAI API key not found in env.config");
+      // Check if there's already a request in progress for this text
+      if (this.apiRequestQueue.has(cacheKey)) {
+        return await this.apiRequestQueue.get(cacheKey);
       }
 
-      const prompt = `Please summarize this highlighted text from a webpage in 2-3 sentences:
+      // Create new request promise
+      const requestPromise = this.performSummarizeRequest(highlight, cacheKey);
+      this.apiRequestQueue.set(cacheKey, requestPromise);
 
-Highlight: "${highlight.text}"
-Page Title: "${highlight.title}"
-Domain: "${highlight.domain}"
-
-Provide a concise summary that captures the key points:`;
-
-      const aiResponse = await fetch(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: config.AI_MODEL || "gpt-4",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a helpful AI assistant that summarizes highlighted text from web pages.",
-              },
-              { role: "user", content: prompt },
-            ],
-            max_tokens: parseInt(config.AI_MAX_TOKENS) || 150,
-            temperature: parseFloat(config.AI_TEMPERATURE) || 0.8,
-          }),
-        }
-      );
-
-      if (!aiResponse.ok) {
-        throw new Error(`API request failed: ${aiResponse.status}`);
+      try {
+        const summary = await requestPromise;
+        return summary;
+      } finally {
+        // Clean up the request queue
+        this.apiRequestQueue.delete(cacheKey);
       }
-
-      const data = await aiResponse.json();
-      return data.choices[0].message.content.trim();
     } catch (error) {
       console.error("AI summarization failed:", error);
       throw error;
     }
   }
 
+  generateSummaryCacheKey(highlight) {
+    // Create a hash of the highlight text for caching
+    const text = highlight.text.substring(0, 100); // Limit text length for key
+    return `${text}_${highlight.url}_${highlight.title}`.replace(
+      /[^a-zA-Z0-9]/g,
+      "_"
+    );
+  }
+
+  async performSummarizeRequest(highlight, cacheKey) {
+    // Send request to background script for secure API handling
+    const requestId = this.generateRequestId();
+
+    try {
+      const response = await this.sendMessageToBackground({
+        action: "summarizeHighlight",
+        requestId: requestId,
+        highlight: this.sanitizeHighlight(highlight),
+        cacheKey: cacheKey,
+      });
+
+      if (response.success) {
+        const summary = response.summary;
+
+        // Cache the result (only non-sensitive data)
+        this.summaryCache.set(cacheKey, {
+          summary: summary,
+          timestamp: Date.now(),
+        });
+
+        return summary;
+      } else {
+        throw new Error(response.error || "Background script returned error");
+      }
+    } catch (error) {
+      console.error("Background script communication failed:", error);
+      throw error;
+    }
+  }
+
+  async getCachedConfig() {
+    if (this.configCache) {
+      return this.configCache;
+    }
+
+    // Load config
+    const response = await fetch(chrome.runtime.getURL("env.config"));
+    const envText = await response.text();
+
+    const config = {};
+    const lines = envText.split("\n");
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine && !trimmedLine.startsWith("#")) {
+        const [key, value] = trimmedLine.split("=");
+        if (key && value) {
+          config[key.trim()] = value.trim();
+        }
+      }
+    }
+
+    // Cache the config
+    this.configCache = config;
+    return config;
+  }
+
+  generateRequestId() {
+    return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  sanitizeHighlight(highlight) {
+    // Sanitize and validate highlight data before sending to background
+    return {
+      text: String(highlight.text || "").substring(0, 1000), // Limit text length
+      url: String(highlight.url || "").substring(0, 500), // Limit URL length
+      title: String(highlight.title || "").substring(0, 200), // Limit title length
+      domain: String(highlight.domain || "").substring(0, 100), // Limit domain length
+    };
+  }
+
+  async sendMessageToBackground(message) {
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error("Background script response timeout"));
+      }, 30000); // 30 second timeout
+
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          clearTimeout(timeoutId);
+
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else if (!response) {
+            reject(new Error("No response from background script"));
+          } else {
+            resolve(response);
+          }
+        });
+      } catch (error) {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    });
+  }
+
   removePopup() {
     if (this.currentPopup) {
-      // Clean up event listeners
-      const saveBtn = this.currentPopup.querySelector(
-        "#highlight-save-btn-unique"
-      );
-      const cancelBtn = this.currentPopup.querySelector(
-        "#highlight-cancel-btn-unique"
-      );
-      const summarizeBtn = this.currentPopup.querySelector(
-        "#highlight-summarize-btn-unique"
-      );
+      // Clean up event listeners more efficiently
+      const buttons = [
+        this.currentPopup.querySelector("#highlight-save-btn-unique"),
+        this.currentPopup.querySelector("#highlight-cancel-btn-unique"),
+        this.currentPopup.querySelector("#highlight-summarize-btn-unique"),
+      ];
 
-      if (saveBtn && saveBtn._highlightHandler) {
-        saveBtn.removeEventListener("click", saveBtn._highlightHandler, true);
-        saveBtn.removeEventListener(
-          "mousedown",
-          saveBtn._highlightHandler,
-          true
-        );
-      }
-
-      if (cancelBtn && cancelBtn._highlightHandler) {
-        cancelBtn.removeEventListener(
-          "click",
-          cancelBtn._highlightHandler,
-          true
-        );
-        cancelBtn.removeEventListener(
-          "mousedown",
-          cancelBtn._highlightHandler,
-          true
-        );
-      }
-
-      if (summarizeBtn && summarizeBtn._highlightHandler) {
-        summarizeBtn.removeEventListener(
-          "click",
-          summarizeBtn._highlightHandler,
-          true
-        );
-        summarizeBtn.removeEventListener(
-          "mousedown",
-          summarizeBtn._highlightHandler,
-          true
-        );
-      }
-
-      // Clean up any potential inline handlers
-      if (saveBtn) saveBtn.onclick = null;
-      if (cancelBtn) cancelBtn.onclick = null;
-      if (summarizeBtn) summarizeBtn.onclick = null;
+      buttons.forEach((btn) => {
+        if (btn && btn._highlightHandler) {
+          // Remove both click and mousedown listeners
+          btn.removeEventListener("click", btn._highlightHandler, true);
+          btn.removeEventListener("mousedown", btn._highlightHandler, true);
+          // Clear the stored handler reference
+          btn._highlightHandler = null;
+        }
+        // Clean up any potential inline handlers
+        if (btn) btn.onclick = null;
+      });
 
       this.currentPopup.remove();
       this.currentPopup = null;
@@ -479,59 +601,286 @@ Provide a concise summary that captures the key points:`;
     }
 
     try {
-      // Recreate the range from stored data
-      const range = document.createRange();
-      range.setStart(
-        this.pendingHighlight.range.startContainer,
-        this.pendingHighlight.range.startOffset
-      );
-      range.setEnd(
-        this.pendingHighlight.range.endContainer,
-        this.pendingHighlight.range.endOffset
-      );
+      // Use improved range recreation with validation
+      const range = this.createValidRangeFromData(this.pendingHighlight.range);
+
+      if (!range) {
+        // Fallback to text-based marking
+        this.markTextByContent(this.pendingHighlight.text, highlightId);
+        return;
+      }
 
       // Use a more robust method to mark text
       this.markRangeWithSpan(range, highlightId);
     } catch (error) {
       console.error("Error marking text as saved:", error);
-      // Fallback: just clear any existing selection
-      const selection = window.getSelection();
-      selection.removeAllRanges();
+      // Fallback: try text-based marking
+      this.markTextByContent(this.pendingHighlight.text, highlightId);
     }
+  }
+
+  createValidRangeFromData(rangeData) {
+    try {
+      // Validate range data before creating range
+      if (!this.isValidRangeData(rangeData)) {
+        return null;
+      }
+
+      // Additional validation: check offset ordering for same container
+      if (rangeData.startContainer === rangeData.endContainer) {
+        if (rangeData.startOffset > rangeData.endOffset) {
+          console.warn(
+            "Invalid range: startOffset > endOffset for same container"
+          );
+          return null;
+        }
+      }
+
+      const range = document.createRange();
+
+      // Set start with validation
+      if (this.isValidNode(rangeData.startContainer)) {
+        range.setStart(rangeData.startContainer, rangeData.startOffset);
+      } else {
+        return null;
+      }
+
+      // Set end with validation
+      if (this.isValidNode(rangeData.endContainer)) {
+        range.setEnd(rangeData.endContainer, rangeData.endOffset);
+      } else {
+        return null;
+      }
+
+      // Validate the created range
+      if (range.collapsed) {
+        return null;
+      }
+
+      return range;
+    } catch (error) {
+      console.error("Error creating range from data:", error);
+      return null;
+    }
+  }
+
+  isValidRangeData(rangeData) {
+    return (
+      rangeData &&
+      rangeData.startContainer &&
+      rangeData.endContainer &&
+      typeof rangeData.startOffset === "number" &&
+      typeof rangeData.endOffset === "number" &&
+      rangeData.startOffset >= 0 &&
+      rangeData.endOffset >= 0
+    );
+  }
+
+  isValidNode(node) {
+    return node && node.nodeType && node.parentNode && document.contains(node);
+  }
+
+  markTextByContent(text, highlightId) {
+    // Fallback method: find text by content and mark it
+    const textNodes = this.findTextNodesOptimized(text);
+
+    if (textNodes.length === 0) {
+      return;
+    }
+
+    // Find the best matching text node using context information
+    const bestNode = this.findBestTextNode(textNodes, text);
+
+    if (bestNode) {
+      const content = bestNode.textContent;
+      const index = content.indexOf(text);
+
+      if (index !== -1) {
+        this.markTextInNode(bestNode, text, index, {
+          id: highlightId,
+          text: text,
+        });
+      }
+    }
+  }
+
+  findBestTextNode(textNodes, text) {
+    if (textNodes.length === 1) {
+      return textNodes[0];
+    }
+
+    // If we have pending highlight data, use it to find the best match
+    if (this.pendingHighlight && this.pendingHighlight.surroundingText) {
+      return this.findNodeByContext(textNodes, text);
+    }
+
+    // If we have position data, use it to find the closest match
+    if (this.pendingHighlight && this.pendingHighlight.textPosition) {
+      return this.findNodeByPosition(textNodes, text);
+    }
+
+    // Fallback: return the first node that contains the exact text
+    return (
+      textNodes.find((node) => {
+        const content = node.textContent;
+        return content.includes(text);
+      }) || textNodes[0]
+    );
+  }
+
+  findNodeByContext(textNodes, text) {
+    const surroundingText = this.pendingHighlight.surroundingText;
+    let bestNode = null;
+    let bestScore = 0;
+
+    textNodes.forEach((node) => {
+      const content = node.textContent;
+      const index = content.indexOf(text);
+
+      if (index !== -1) {
+        // Get surrounding context from this node
+        const nodeContext = this.getNodeContext(node, index, text.length);
+
+        // Calculate similarity score with the original surrounding text
+        const score = this.calculateContextSimilarity(
+          surroundingText,
+          nodeContext
+        );
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestNode = node;
+        }
+      }
+    });
+
+    return bestNode || textNodes[0];
+  }
+
+  findNodeByPosition(textNodes, text) {
+    const targetPosition = this.pendingHighlight.textPosition;
+    let bestNode = null;
+    let bestDistance = Infinity;
+
+    textNodes.forEach((node) => {
+      const content = node.textContent;
+      const index = content.indexOf(text);
+
+      if (index !== -1) {
+        try {
+          // Create a temporary range to get position
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + text.length);
+
+          const rect = range.getBoundingClientRect();
+          const nodePosition = {
+            top: rect.top + window.scrollY,
+            left: rect.left + window.scrollX,
+          };
+
+          // Calculate distance from target position
+          const distance = Math.sqrt(
+            Math.pow(nodePosition.top - targetPosition.top, 2) +
+              Math.pow(nodePosition.left - targetPosition.left, 2)
+          );
+
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestNode = node;
+          }
+        } catch (error) {
+          // If range creation fails, continue with next node
+          console.warn("Failed to get position for text node:", error);
+        }
+      }
+    });
+
+    return bestNode || textNodes[0];
+  }
+
+  getNodeContext(node, textIndex, textLength) {
+    const content = node.textContent;
+    const start = Math.max(0, textIndex - 50);
+    const end = Math.min(content.length, textIndex + textLength + 50);
+    return content.substring(start, end);
+  }
+
+  calculateContextSimilarity(originalContext, nodeContext) {
+    // Simple similarity calculation based on common words
+    const originalWords = originalContext.toLowerCase().split(/\s+/);
+    const nodeWords = nodeContext.toLowerCase().split(/\s+/);
+
+    let commonWords = 0;
+    originalWords.forEach((word) => {
+      if (nodeWords.includes(word)) {
+        commonWords++;
+      }
+    });
+
+    return commonWords / Math.max(originalWords.length, nodeWords.length);
   }
 
   markRangeWithSpan(range, highlightId) {
     try {
-      // First try the simple surroundContents method
-      const span = document.createElement("span");
-      span.className = "highlight-saver-saved";
-      span.dataset.highlightId = highlightId;
-      span.title = "Saved highlight - Click to view in extension";
-      span.style.backgroundColor = "#ffff99";
-      span.style.padding = "1px 2px";
-      span.style.borderRadius = "2px";
+      // Validate range before attempting to mark
+      if (!this.isValidRangeForMarking(range)) {
+        throw new Error("Invalid range for marking");
+      }
 
+      // Create span without text content to avoid duplication
+      const span = this.createHighlightSpan({
+        id: highlightId,
+        text: "", // Empty text to prevent duplication
+      });
+
+      // Let DOM move the original nodes into the span
       range.surroundContents(span);
+
+      // Set attributes after the DOM manipulation
+      span.title = "Saved highlight - Click to view in extension";
+
       this.savedHighlights.set(highlightId, span);
     } catch (rangeError) {
+      console.warn("surroundContents failed, trying fallback:", rangeError);
       // Fallback: manually extract and wrap content
       this.markRangeWithFallback(range, highlightId);
     }
   }
 
+  isValidRangeForMarking(range) {
+    try {
+      return (
+        range &&
+        !range.collapsed &&
+        range.startContainer &&
+        range.endContainer &&
+        range.startContainer.parentNode &&
+        range.endContainer.parentNode &&
+        document.contains(range.startContainer) &&
+        document.contains(range.endContainer)
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   markRangeWithFallback(range, highlightId) {
     try {
+      // Validate range before fallback
+      if (!this.isValidRangeForMarking(range)) {
+        throw new Error("Range invalid for fallback marking");
+      }
+
       // Extract the content from the range
       const contents = range.extractContents();
+      const textContent = range.toString();
 
       // Create the span wrapper
-      const span = document.createElement("span");
-      span.className = "highlight-saver-saved";
-      span.dataset.highlightId = highlightId;
-      span.title = "Saved highlight - Click to view in extension";
-      span.style.backgroundColor = "#ffff99";
-      span.style.padding = "1px 2px";
-      span.style.borderRadius = "2px";
+      const span = this.createHighlightSpan({
+        id: highlightId,
+        text: textContent,
+      });
 
       // Put the extracted content into the span
       span.appendChild(contents);
@@ -545,9 +894,15 @@ Provide a concise summary that captures the key points:`;
       this.savedHighlights.set(highlightId, span);
     } catch (fallbackError) {
       console.error("Fallback marking also failed:", fallbackError);
-      // Last resort: just clear the selection
-      const selection = window.getSelection();
-      selection.removeAllRanges();
+      // Last resort: try text-based marking
+      const textContent = range.toString();
+      if (textContent) {
+        this.markTextByContent(textContent, highlightId);
+      } else {
+        // Clear the selection as final fallback
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+      }
     }
   }
 
@@ -651,14 +1006,11 @@ Provide a concise summary that captures the key points:`;
 
   markExistingHighlights() {
     try {
-      // Clear existing marks
-      document.querySelectorAll(".highlight-saver-saved").forEach((el) => {
-        if (el && el.parentNode) {
-          const parent = el.parentNode;
-          parent.replaceChild(document.createTextNode(el.textContent), el);
-          parent.normalize();
-        }
-      });
+      // Use cached DOM elements for better performance
+      this.updateDomCache();
+
+      // Batch DOM operations for existing highlights removal
+      this.removeExistingHighlightsBatch();
       this.savedHighlights.clear();
 
       // Mark highlights for current page
@@ -667,59 +1019,266 @@ Provide a concise summary that captures the key points:`;
         (h) => h.url === currentUrl
       );
 
-      pageHighlights.forEach((highlight) => {
-        this.findAndMarkText(highlight);
-      });
+      // Process highlights in chunks to avoid blocking the UI
+      this.processHighlightsInChunks(pageHighlights);
     } catch (error) {
       console.error("Error marking existing highlights:", error);
     }
   }
 
+  updateDomCache() {
+    const now = Date.now();
+    if (now - this.domCache.lastCacheTime > this.cacheValidityDuration) {
+      this.domCache.body = document.body;
+      this.domCache.existingHighlights = document.querySelectorAll(
+        ".highlight-saver-saved"
+      );
+      this.domCache.lastCacheTime = now;
+    }
+  }
+
+  removeExistingHighlightsBatch() {
+    if (!this.domCache.existingHighlights) {
+      this.domCache.existingHighlights = document.querySelectorAll(
+        ".highlight-saver-saved"
+      );
+    }
+
+    // Create a document fragment for batch operations
+    const textNodes = [];
+
+    // Collect all text nodes to be created
+    this.domCache.existingHighlights.forEach((el) => {
+      if (el && el.parentNode) {
+        const textNode = document.createTextNode(el.textContent);
+        textNodes.push({ element: el, textNode: textNode });
+      }
+    });
+
+    // Batch replace elements with text nodes
+    textNodes.forEach(({ element, textNode }) => {
+      if (element.parentNode) {
+        element.parentNode.replaceChild(textNode, element);
+      }
+    });
+
+    // Normalize parent nodes in batches
+    const parentsToNormalize = new Set();
+    textNodes.forEach(({ element }) => {
+      if (element.parentNode) {
+        parentsToNormalize.add(element.parentNode);
+      }
+    });
+
+    parentsToNormalize.forEach((parent) => {
+      parent.normalize();
+    });
+  }
+
+  processHighlightsInChunks(highlights, chunkSize = 5) {
+    if (highlights.length === 0) return;
+
+    let currentIndex = 0;
+
+    const processChunk = () => {
+      const chunk = highlights.slice(currentIndex, currentIndex + chunkSize);
+
+      chunk.forEach((highlight) => {
+        this.findAndMarkTextOptimized(highlight);
+      });
+
+      currentIndex += chunkSize;
+
+      if (currentIndex < highlights.length) {
+        // Use requestIdleCallback if available, otherwise setTimeout
+        if (window.requestIdleCallback) {
+          requestIdleCallback(processChunk, { timeout: 100 });
+        } else {
+          setTimeout(processChunk, 10);
+        }
+      }
+    };
+
+    processChunk();
+  }
+
   findAndMarkText(highlight) {
+    // Use optimized version for better performance
+    this.findAndMarkTextOptimized(highlight);
+  }
+
+  findAndMarkTextOptimized(highlight) {
     const text = highlight.text;
+
+    // Check cache first
+    const cacheKey = `${text}_${window.location.href}`;
+    if (this.textNodeCache.has(cacheKey)) {
+      const cachedNodes = this.textNodeCache.get(cacheKey);
+      this.markTextInNodes(cachedNodes, highlight);
+      return;
+    }
+
+    // Use more efficient text search with early termination
+    const textNodes = this.findTextNodesOptimized(text);
+
+    // Cache the results
+    this.textNodeCache.set(cacheKey, textNodes);
+
+    // Mark text in found nodes
+    this.markTextInNodes(textNodes, highlight);
+  }
+
+  findTextNodesOptimized(searchText) {
+    const textNodes = [];
+    const searchLength = searchText.length;
+
+    // Use a more efficient search strategy
+    if (searchLength < 3) {
+      // For short text, use TreeWalker but with early termination
+      const walker = document.createTreeWalker(
+        this.domCache.body || document.body,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode: (node) => {
+            // Skip nodes that are too short
+            if (node.textContent.length < searchLength) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        },
+        false
+      );
+
+      let node;
+      let foundCount = 0;
+      const maxMatches = 10; // Limit matches for performance
+
+      while ((node = walker.nextNode()) && foundCount < maxMatches) {
+        if (node.textContent.includes(searchText)) {
+          textNodes.push(node);
+          foundCount++;
+        }
+      }
+    } else {
+      // For longer text, use more targeted search
+      const allTextNodes = this.getAllTextNodes();
+
+      // Use binary search-like approach for large text nodes
+      for (const textNode of allTextNodes) {
+        if (textNode.textContent.includes(searchText)) {
+          textNodes.push(textNode);
+          if (textNodes.length >= 5) break; // Limit results
+        }
+      }
+    }
+
+    return textNodes;
+  }
+
+  getAllTextNodes() {
+    // Cache all text nodes for repeated searches
+    const cacheKey = "all_text_nodes";
+    const now = Date.now();
+
+    if (this.textNodeCache.has(cacheKey)) {
+      const cached = this.textNodeCache.get(cacheKey);
+      if (now - cached.timestamp < this.cacheValidityDuration) {
+        return cached.nodes;
+      }
+    }
+
+    const textNodes = [];
     const walker = document.createTreeWalker(
-      document.body,
+      this.domCache.body || document.body,
       NodeFilter.SHOW_TEXT,
-      null,
+      {
+        acceptNode: (node) => {
+          // Skip very short text nodes and whitespace-only nodes
+          const trimmed = node.textContent.trim();
+          if (trimmed.length < 2) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      },
       false
     );
 
-    const textNodes = [];
     let node;
     while ((node = walker.nextNode())) {
-      if (node.textContent.includes(text)) {
-        textNodes.push(node);
-      }
+      textNodes.push(node);
     }
+
+    // Cache the results
+    this.textNodeCache.set(cacheKey, {
+      nodes: textNodes,
+      timestamp: now,
+    });
+
+    return textNodes;
+  }
+
+  markTextInNodes(textNodes, highlight) {
+    const text = highlight.text;
 
     textNodes.forEach((textNode) => {
       const content = textNode.textContent;
       const index = content.indexOf(text);
 
       if (index !== -1) {
-        const before = content.substring(0, index);
-        const after = content.substring(index + text.length);
-
-        const span = document.createElement("span");
-        span.className = "highlight-saver-saved";
-        span.dataset.highlightId = highlight.id;
-        span.textContent = text;
-        span.title = "Saved highlight - Click to view in extension";
-        span.style.backgroundColor = "#ffff99";
-        span.style.padding = "1px 2px";
-        span.style.borderRadius = "2px";
-
-        const parent = textNode.parentNode;
-        const beforeNode = document.createTextNode(before);
-        const afterNode = document.createTextNode(after);
-
-        parent.replaceChild(beforeNode, textNode);
-        parent.insertBefore(span, beforeNode.nextSibling);
-        parent.insertBefore(afterNode, span.nextSibling);
-
-        this.savedHighlights.set(highlight.id, span);
+        // Use more efficient DOM manipulation
+        this.markTextInNode(textNode, text, index, highlight);
       }
     });
+  }
+
+  markTextInNode(textNode, text, index, highlight) {
+    const content = textNode.textContent;
+    const before = content.substring(0, index);
+    const after = content.substring(index + text.length);
+
+    // Create span element with optimized styling
+    const span = this.createHighlightSpan(highlight);
+
+    const parent = textNode.parentNode;
+
+    // Use more efficient DOM operations
+    if (before) {
+      const beforeNode = document.createTextNode(before);
+      parent.insertBefore(beforeNode, textNode);
+    }
+
+    parent.insertBefore(span, textNode.nextSibling);
+
+    if (after) {
+      const afterNode = document.createTextNode(after);
+      parent.insertBefore(afterNode, span.nextSibling);
+    }
+
+    // Remove the original text node
+    parent.removeChild(textNode);
+
+    this.savedHighlights.set(highlight.id, span);
+  }
+
+  createHighlightSpan(highlight) {
+    const span = document.createElement("span");
+    span.className = "highlight-saver-saved";
+    span.dataset.highlightId = highlight.id;
+
+    // Only set textContent if text is provided and not empty
+    if (highlight.text && highlight.text.trim() !== "") {
+      span.textContent = highlight.text;
+    }
+
+    span.title = "Saved highlight - Click to view in extension";
+
+    // Use CSS classes instead of inline styles for better performance
+    span.style.cssText =
+      "background-color: #ffff99; padding: 1px 2px; border-radius: 2px;";
+
+    return span;
   }
 
   showSuccessFeedback() {
@@ -797,21 +1356,8 @@ Provide a concise summary that captures the key points:`;
 
   scrollToAndHighlightText(text, positionData) {
     try {
-      // Try to find the text on the page
-      const textNodes = [];
-      const walker = document.createTreeWalker(
-        document.body,
-        NodeFilter.SHOW_TEXT,
-        null,
-        false
-      );
-
-      let node;
-      while ((node = walker.nextNode())) {
-        if (node.textContent.includes(text)) {
-          textNodes.push(node);
-        }
-      }
+      // Use cached text nodes for better performance
+      const textNodes = this.findTextNodesOptimized(text);
 
       if (textNodes.length > 0) {
         // Find the best match (exact match or closest)
@@ -978,6 +1524,184 @@ Provide a concise summary that captures the key points:`;
         this.currentPopup = null;
       }
     }, 15000);
+  }
+
+  // Memory management methods
+  startMemoryCleanup() {
+    // Clear existing interval if any
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+
+    // Run cleanup every 2 minutes
+    this.cleanupInterval = setInterval(() => {
+      this.performMemoryCleanup();
+    }, 120000); // 2 minutes
+  }
+
+  performMemoryCleanup() {
+    const now = Date.now();
+
+    // Clean up expired caches
+    this.cleanupExpiredCaches(now);
+
+    // Limit cache sizes
+    this.limitCacheSizes();
+
+    // Clear old DOM references
+    this.cleanupDomReferences();
+
+    // Update memory usage tracking
+    this.memoryUsage.lastCleanup = now;
+    this.memoryUsage.cacheSize =
+      this.textNodeCache.size + this.summaryCache.size;
+
+    // Force garbage collection hint (if available)
+    if (window.gc) {
+      window.gc();
+    }
+  }
+
+  cleanupExpiredCaches(now) {
+    // Clean up expired text node caches
+    for (const [key, value] of this.textNodeCache.entries()) {
+      if (
+        value.timestamp &&
+        now - value.timestamp > this.cacheValidityDuration
+      ) {
+        this.textNodeCache.delete(key);
+      }
+    }
+
+    // Clean up expired summary caches
+    for (const [key, value] of this.summaryCache.entries()) {
+      if (value.timestamp && now - value.timestamp > 300000) {
+        // 5 minutes for summaries
+        this.summaryCache.delete(key);
+      }
+    }
+
+    // Clear old DOM cache if expired
+    if (now - this.domCache.lastCacheTime > this.cacheValidityDuration) {
+      this.domCache.body = null;
+      this.domCache.existingHighlights = null;
+    }
+  }
+
+  limitCacheSizes() {
+    // Limit text node cache size using O(n) approach
+    this.limitCacheSize(this.textNodeCache, this.maxTextNodesCache);
+
+    // Limit summary cache size using O(n) approach
+    this.limitCacheSize(this.summaryCache, this.maxSummaryCacheSize);
+  }
+
+  limitCacheSize(cache, maxSize) {
+    if (cache.size <= maxSize) {
+      return;
+    }
+
+    const entriesToDelete = cache.size - maxSize;
+    const oldestEntries = this.findOldestEntries(cache, entriesToDelete);
+
+    // Delete the oldest entries
+    oldestEntries.forEach((key) => {
+      cache.delete(key);
+    });
+  }
+
+  findOldestEntries(cache, count) {
+    const oldestKeys = [];
+    let oldestTimestamp = Infinity;
+
+    // First pass: find the oldest timestamp
+    for (const [key, value] of cache.entries()) {
+      const timestamp = value.timestamp || 0;
+      if (timestamp < oldestTimestamp) {
+        oldestTimestamp = timestamp;
+      }
+    }
+
+    // Second pass: collect all entries with the oldest timestamp
+    for (const [key, value] of cache.entries()) {
+      const timestamp = value.timestamp || 0;
+      if (timestamp === oldestTimestamp) {
+        oldestKeys.push(key);
+        if (oldestKeys.length >= count) {
+          break; // We have enough entries to delete
+        }
+      }
+    }
+
+    // If we still need more entries, find the next oldest timestamp
+    if (oldestKeys.length < count) {
+      let nextOldestTimestamp = Infinity;
+
+      // Find the next oldest timestamp
+      for (const [key, value] of cache.entries()) {
+        const timestamp = value.timestamp || 0;
+        if (timestamp > oldestTimestamp && timestamp < nextOldestTimestamp) {
+          nextOldestTimestamp = timestamp;
+        }
+      }
+
+      // Collect entries with the next oldest timestamp
+      for (const [key, value] of cache.entries()) {
+        const timestamp = value.timestamp || 0;
+        if (timestamp === nextOldestTimestamp) {
+          oldestKeys.push(key);
+          if (oldestKeys.length >= count) {
+            break;
+          }
+        }
+      }
+    }
+
+    return oldestKeys.slice(0, count);
+  }
+
+  cleanupDomReferences() {
+    // Clear weak references to DOM elements
+    this.savedHighlights.forEach((element, id) => {
+      if (!element || !element.parentNode) {
+        this.savedHighlights.delete(id);
+      }
+    });
+  }
+
+  // Cleanup method for proper event handler and timeout cleanup
+  cleanup() {
+    // Clear any pending selection timeout
+    if (this.selectionTimeout) {
+      clearTimeout(this.selectionTimeout);
+      this.selectionTimeout = null;
+    }
+
+    // Clear cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+
+    // Remove popup if exists
+    this.removePopup();
+
+    // Clear pending highlight data
+    this.pendingHighlight = null;
+
+    // Clear saved highlights map
+    this.savedHighlights.clear();
+
+    // Clear all caches
+    this.textNodeCache.clear();
+    this.summaryCache.clear();
+    this.apiRequestQueue.clear();
+
+    this.domCache = {
+      body: null,
+      existingHighlights: null,
+      lastCacheTime: 0,
+    };
   }
 }
 

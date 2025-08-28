@@ -50,6 +50,11 @@ class BackgroundService {
           sendResponse({ success: true });
           break;
 
+        case "summarizeHighlight":
+          const summary = await this.summarizeHighlight(request);
+          sendResponse({ success: true, summary });
+          break;
+
         default:
           console.warn("Unknown action:", request.action);
           sendResponse({ success: false, error: "Unknown action" });
@@ -292,6 +297,180 @@ class BackgroundService {
     } catch (error) {
       console.error("Failed to cleanup old highlights:", error);
       throw new Error("Failed to cleanup old highlights: " + error.message);
+    }
+  }
+
+  // Summarize highlight functionality
+  async summarizeHighlight(request) {
+    try {
+      // Validate request
+      if (!request.requestId || !request.highlight || !request.cacheKey) {
+        throw new Error("Invalid request: missing required fields");
+      }
+
+      // Check cache first
+      const cachedSummary = await this.getCachedSummary(request.cacheKey);
+      if (cachedSummary) {
+        return cachedSummary;
+      }
+
+      // Validate and sanitize highlight data
+      const sanitizedHighlight = this.sanitizeHighlight(request.highlight);
+
+      // Get configuration
+      const config = await this.getConfig();
+
+      // Perform OpenAI API call
+      const summary = await this.callOpenAI(sanitizedHighlight, config);
+
+      // Cache the result
+      await this.cacheSummary(request.cacheKey, summary);
+
+      return summary;
+    } catch (error) {
+      console.error("Summarize highlight failed:", error);
+      throw new Error("Failed to summarize: " + error.message);
+    }
+  }
+
+  async getCachedSummary(cacheKey) {
+    try {
+      const result = await chrome.storage.local.get(["summaryCache"]);
+      const cache = result.summaryCache || {};
+
+      const cached = cache[cacheKey];
+      if (cached && Date.now() - cached.timestamp < 300000) {
+        // 5 minutes
+        return cached.summary;
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Failed to get cached summary:", error);
+      return null;
+    }
+  }
+
+  async cacheSummary(cacheKey, summary) {
+    try {
+      const result = await chrome.storage.local.get(["summaryCache"]);
+      const cache = result.summaryCache || {};
+
+      // Limit cache size
+      const cacheKeys = Object.keys(cache);
+      if (cacheKeys.length >= 50) {
+        // Max 50 cached summaries
+        // Remove oldest entries
+        const sortedKeys = cacheKeys.sort(
+          (a, b) => (cache[a].timestamp || 0) - (cache[b].timestamp || 0)
+        );
+        const toDelete = sortedKeys.slice(0, cacheKeys.length - 49);
+        toDelete.forEach((key) => delete cache[key]);
+      }
+
+      cache[cacheKey] = {
+        summary: summary,
+        timestamp: Date.now(),
+      };
+
+      await chrome.storage.local.set({ summaryCache: cache });
+    } catch (error) {
+      console.error("Failed to cache summary:", error);
+    }
+  }
+
+  sanitizeHighlight(highlight) {
+    // Validate and sanitize highlight data
+    if (!highlight || typeof highlight !== "object") {
+      throw new Error("Invalid highlight data");
+    }
+
+    return {
+      text: String(highlight.text || "").substring(0, 1000),
+      url: String(highlight.url || "").substring(0, 500),
+      title: String(highlight.title || "").substring(0, 200),
+      domain: String(highlight.domain || "").substring(0, 100),
+    };
+  }
+
+  async getConfig() {
+    try {
+      // Load config from env.config file
+      const response = await fetch(chrome.runtime.getURL("env.config"));
+      const envText = await response.text();
+
+      const config = {};
+      const lines = envText.split("\n");
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine && !trimmedLine.startsWith("#")) {
+          const [key, value] = trimmedLine.split("=");
+          if (key && value) {
+            config[key.trim()] = value.trim();
+          }
+        }
+      }
+
+      if (!config.OPENAI_API_KEY) {
+        throw new Error("OpenAI API key not found in env.config");
+      }
+
+      return config;
+    } catch (error) {
+      console.error("Failed to load config:", error);
+      throw new Error("Configuration error: " + error.message);
+    }
+  }
+
+  async callOpenAI(highlight, config) {
+    try {
+      const prompt = `Please summarize this highlighted text from a webpage in 2-3 sentences:
+
+Highlight: "${highlight.text}"
+Page Title: "${highlight.title}"
+Domain: "${highlight.domain}"
+
+Provide a concise summary that captures the key points:`;
+
+      const response = await fetch(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: config.AI_MODEL || "gpt-4",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are a helpful AI assistant that summarizes highlighted text from web pages.",
+              },
+              { role: "user", content: prompt },
+            ],
+            max_tokens: parseInt(config.AI_MAX_TOKENS) || 150,
+            temperature: parseFloat(config.AI_TEMPERATURE) || 0.8,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          `OpenAI API error: ${response.status} - ${
+            errorData.error?.message || "Unknown error"
+          }`
+        );
+      }
+
+      const data = await response.json();
+      return data.choices[0].message.content.trim();
+    } catch (error) {
+      console.error("OpenAI API call failed:", error);
+      throw new Error("API call failed: " + error.message);
     }
   }
 
