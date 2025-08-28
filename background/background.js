@@ -425,11 +425,23 @@ class BackgroundService {
 
   async callOpenAI(highlight, config) {
     try {
-      const prompt = `Please summarize this highlighted text from a webpage in 2-3 sentences:
+      // Format the prompt using the SUMMARIZE_HIGHLIGHT template
+      const systemPrompt = `You are a helpful AI assistant that summarizes highlighted text from web pages. 
+Your task is to provide concise, accurate summaries that capture the key points and context.
+
+Guidelines:
+- Keep summaries concise (2-3 sentences max)
+- Maintain the original meaning and tone
+- Focus on the most important information
+- Use clear, readable language
+- Avoid repetition or unnecessary details`;
+
+      const userPrompt = `Please summarize this highlighted text from a webpage:
 
 Highlight: "${highlight.text}"
 Page Title: "${highlight.title}"
 Domain: "${highlight.domain}"
+Context: "${highlight.pageText || ""}"
 
 Provide a concise summary that captures the key points:`;
 
@@ -446,10 +458,9 @@ Provide a concise summary that captures the key points:`;
             messages: [
               {
                 role: "system",
-                content:
-                  "You are a helpful AI assistant that summarizes highlighted text from web pages.",
+                content: systemPrompt,
               },
-              { role: "user", content: prompt },
+              { role: "user", content: userPrompt },
             ],
             max_tokens: parseInt(config.AI_MAX_TOKENS) || 150,
             temperature: parseFloat(config.AI_TEMPERATURE) || 0.8,
