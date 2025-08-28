@@ -126,10 +126,7 @@ website-highlight-saver/
 │       └── README.md         # Utilities documentation
 ├── background/
 │   └── background.js         # Background service worker
-├── prompts/
-│   ├── ai-service.js         # AI service for OpenAI integration
-│   ├── prompts.js            # AI prompt templates
-│   └── README.md             # AI prompts documentation
+
 ├── icons/
 │   ├── icon16.png            # 16x16 extension icon
 │   ├── icon48.png            # 48x48 extension icon
@@ -151,6 +148,7 @@ The extension uses a modular utility-based architecture for better maintainabili
 ### AI Integration
 
 - **OpenAI API**: Uses OpenAI's GPT models for text summarization
+- **Integrated Prompts**: Built-in prompt system for consistent AI responses
 - **Configurable**: Model, tokens, temperature, and timeout are configurable
 - **Error Handling**: Graceful fallback if AI service is unavailable
 - **Local Processing**: No data sent to external servers except OpenAI API
