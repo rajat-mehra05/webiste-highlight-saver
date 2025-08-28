@@ -22,6 +22,21 @@ class HighlightSaver {
     this.lastTextSearchTime = 0;
     this.cacheValidityDuration = 30000; // 30 seconds
 
+    // Memory management optimization
+    this.maxCacheSize = 100; // Maximum number of cached items
+    this.maxTextNodesCache = 50; // Maximum cached text node searches
+    this.cleanupInterval = null;
+    this.memoryUsage = {
+      cacheSize: 0,
+      lastCleanup: Date.now(),
+    };
+
+    // API optimization
+    this.configCache = null;
+    this.summaryCache = new Map();
+    this.maxSummaryCacheSize = 20;
+    this.apiRequestQueue = new Map(); // Prevent duplicate requests
+
     this.init();
   }
 
@@ -39,6 +54,9 @@ class HighlightSaver {
         );
         this.savedHighlightsData = [];
       }
+
+      // Start periodic memory cleanup
+      this.startMemoryCleanup();
     } catch (error) {
       console.error("Error during initialization:", error);
       this.savedHighlightsData = [];
@@ -335,29 +353,57 @@ class HighlightSaver {
 
   async simpleSummarize(highlight) {
     try {
-      // Load config
-      const response = await fetch(chrome.runtime.getURL("env.config"));
-      const envText = await response.text();
-
-      const config = {};
-      const lines = envText.split("\n");
-
-      for (const line of lines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine && !trimmedLine.startsWith("#")) {
-          const [key, value] = trimmedLine.split("=");
-          if (key && value) {
-            config[key.trim()] = value.trim();
-          }
+      // Check cache first
+      const cacheKey = this.generateSummaryCacheKey(highlight);
+      if (this.summaryCache.has(cacheKey)) {
+        const cached = this.summaryCache.get(cacheKey);
+        if (Date.now() - cached.timestamp < 300000) {
+          // 5 minutes cache
+          return cached.summary;
         }
       }
 
-      const apiKey = config.OPENAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("OpenAI API key not found in env.config");
+      // Check if there's already a request in progress for this text
+      if (this.apiRequestQueue.has(cacheKey)) {
+        return await this.apiRequestQueue.get(cacheKey);
       }
 
-      const prompt = `Please summarize this highlighted text from a webpage in 2-3 sentences:
+      // Create new request promise
+      const requestPromise = this.performSummarizeRequest(highlight, cacheKey);
+      this.apiRequestQueue.set(cacheKey, requestPromise);
+
+      try {
+        const summary = await requestPromise;
+        return summary;
+      } finally {
+        // Clean up the request queue
+        this.apiRequestQueue.delete(cacheKey);
+      }
+    } catch (error) {
+      console.error("AI summarization failed:", error);
+      throw error;
+    }
+  }
+
+  generateSummaryCacheKey(highlight) {
+    // Create a hash of the highlight text for caching
+    const text = highlight.text.substring(0, 100); // Limit text length for key
+    return `${text}_${highlight.url}_${highlight.title}`.replace(
+      /[^a-zA-Z0-9]/g,
+      "_"
+    );
+  }
+
+  async performSummarizeRequest(highlight, cacheKey) {
+    // Get cached config
+    const config = await this.getCachedConfig();
+
+    const apiKey = config.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OpenAI API key not found in env.config");
+    }
+
+    const prompt = `Please summarize this highlighted text from a webpage in 2-3 sentences:
 
 Highlight: "${highlight.text}"
 Page Title: "${highlight.title}"
@@ -365,40 +411,71 @@ Domain: "${highlight.domain}"
 
 Provide a concise summary that captures the key points:`;
 
-      const aiResponse = await fetch(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: config.AI_MODEL || "gpt-4",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a helpful AI assistant that summarizes highlighted text from web pages.",
-              },
-              { role: "user", content: prompt },
-            ],
-            max_tokens: parseInt(config.AI_MAX_TOKENS) || 150,
-            temperature: parseFloat(config.AI_TEMPERATURE) || 0.8,
-          }),
-        }
-      );
-
-      if (!aiResponse.ok) {
-        throw new Error(`API request failed: ${aiResponse.status}`);
+    const aiResponse = await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.AI_MODEL || "gpt-4",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a helpful AI assistant that summarizes highlighted text from web pages.",
+            },
+            { role: "user", content: prompt },
+          ],
+          max_tokens: parseInt(config.AI_MAX_TOKENS) || 150,
+          temperature: parseFloat(config.AI_TEMPERATURE) || 0.8,
+        }),
       }
+    );
 
-      const data = await aiResponse.json();
-      return data.choices[0].message.content.trim();
-    } catch (error) {
-      console.error("AI summarization failed:", error);
-      throw error;
+    if (!aiResponse.ok) {
+      throw new Error(`API request failed: ${aiResponse.status}`);
     }
+
+    const data = await aiResponse.json();
+    const summary = data.choices[0].message.content.trim();
+
+    // Cache the result
+    this.summaryCache.set(cacheKey, {
+      summary: summary,
+      timestamp: Date.now(),
+    });
+
+    return summary;
+  }
+
+  async getCachedConfig() {
+    if (this.configCache) {
+      return this.configCache;
+    }
+
+    // Load config
+    const response = await fetch(chrome.runtime.getURL("env.config"));
+    const envText = await response.text();
+
+    const config = {};
+    const lines = envText.split("\n");
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine && !trimmedLine.startsWith("#")) {
+        const [key, value] = trimmedLine.split("=");
+        if (key && value) {
+          config[key.trim()] = value.trim();
+        }
+      }
+    }
+
+    // Cache the config
+    this.configCache = config;
+    return config;
   }
 
   removePopup() {
@@ -492,59 +569,149 @@ Provide a concise summary that captures the key points:`;
     }
 
     try {
-      // Recreate the range from stored data
-      const range = document.createRange();
-      range.setStart(
-        this.pendingHighlight.range.startContainer,
-        this.pendingHighlight.range.startOffset
-      );
-      range.setEnd(
-        this.pendingHighlight.range.endContainer,
-        this.pendingHighlight.range.endOffset
-      );
+      // Use improved range recreation with validation
+      const range = this.createValidRangeFromData(this.pendingHighlight.range);
+
+      if (!range) {
+        // Fallback to text-based marking
+        this.markTextByContent(this.pendingHighlight.text, highlightId);
+        return;
+      }
 
       // Use a more robust method to mark text
       this.markRangeWithSpan(range, highlightId);
     } catch (error) {
       console.error("Error marking text as saved:", error);
-      // Fallback: just clear any existing selection
-      const selection = window.getSelection();
-      selection.removeAllRanges();
+      // Fallback: try text-based marking
+      this.markTextByContent(this.pendingHighlight.text, highlightId);
+    }
+  }
+
+  createValidRangeFromData(rangeData) {
+    try {
+      // Validate range data before creating range
+      if (!this.isValidRangeData(rangeData)) {
+        return null;
+      }
+
+      const range = document.createRange();
+
+      // Set start with validation
+      if (this.isValidNode(rangeData.startContainer)) {
+        range.setStart(rangeData.startContainer, rangeData.startOffset);
+      } else {
+        return null;
+      }
+
+      // Set end with validation
+      if (this.isValidNode(rangeData.endContainer)) {
+        range.setEnd(rangeData.endContainer, rangeData.endOffset);
+      } else {
+        return null;
+      }
+
+      // Validate the created range
+      if (range.collapsed) {
+        return null;
+      }
+
+      return range;
+    } catch (error) {
+      console.error("Error creating range from data:", error);
+      return null;
+    }
+  }
+
+  isValidRangeData(rangeData) {
+    return (
+      rangeData &&
+      rangeData.startContainer &&
+      rangeData.endContainer &&
+      typeof rangeData.startOffset === "number" &&
+      typeof rangeData.endOffset === "number" &&
+      rangeData.startOffset >= 0 &&
+      rangeData.endOffset >= 0
+    );
+  }
+
+  isValidNode(node) {
+    return node && node.nodeType && node.parentNode && document.contains(node);
+  }
+
+  markTextByContent(text, highlightId) {
+    // Fallback method: find text by content and mark it
+    const textNodes = this.findTextNodesOptimized(text);
+
+    if (textNodes.length > 0) {
+      // Mark the first occurrence found
+      const textNode = textNodes[0];
+      const content = textNode.textContent;
+      const index = content.indexOf(text);
+
+      if (index !== -1) {
+        this.markTextInNode(textNode, text, index, {
+          id: highlightId,
+          text: text,
+        });
+      }
     }
   }
 
   markRangeWithSpan(range, highlightId) {
     try {
+      // Validate range before attempting to mark
+      if (!this.isValidRangeForMarking(range)) {
+        throw new Error("Invalid range for marking");
+      }
+
       // First try the simple surroundContents method
-      const span = document.createElement("span");
-      span.className = "highlight-saver-saved";
-      span.dataset.highlightId = highlightId;
-      span.title = "Saved highlight - Click to view in extension";
-      span.style.backgroundColor = "#ffff99";
-      span.style.padding = "1px 2px";
-      span.style.borderRadius = "2px";
+      const span = this.createHighlightSpan({
+        id: highlightId,
+        text: range.toString(),
+      });
 
       range.surroundContents(span);
       this.savedHighlights.set(highlightId, span);
     } catch (rangeError) {
+      console.warn("surroundContents failed, trying fallback:", rangeError);
       // Fallback: manually extract and wrap content
       this.markRangeWithFallback(range, highlightId);
     }
   }
 
+  isValidRangeForMarking(range) {
+    try {
+      return (
+        range &&
+        !range.collapsed &&
+        range.startContainer &&
+        range.endContainer &&
+        range.startContainer.parentNode &&
+        range.endContainer.parentNode &&
+        document.contains(range.startContainer) &&
+        document.contains(range.endContainer)
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
   markRangeWithFallback(range, highlightId) {
     try {
+      // Validate range before fallback
+      if (!this.isValidRangeForMarking(range)) {
+        throw new Error("Range invalid for fallback marking");
+      }
+
       // Extract the content from the range
       const contents = range.extractContents();
+      const textContent = range.toString();
 
       // Create the span wrapper
-      const span = document.createElement("span");
-      span.className = "highlight-saver-saved";
-      span.dataset.highlightId = highlightId;
-      span.title = "Saved highlight - Click to view in extension";
-      span.style.backgroundColor = "#ffff99";
-      span.style.padding = "1px 2px";
-      span.style.borderRadius = "2px";
+      const span = this.createHighlightSpan({
+        id: highlightId,
+        text: textContent,
+      });
 
       // Put the extracted content into the span
       span.appendChild(contents);
@@ -558,9 +725,15 @@ Provide a concise summary that captures the key points:`;
       this.savedHighlights.set(highlightId, span);
     } catch (fallbackError) {
       console.error("Fallback marking also failed:", fallbackError);
-      // Last resort: just clear the selection
-      const selection = window.getSelection();
-      selection.removeAllRanges();
+      // Last resort: try text-based marking
+      const textContent = range.toString();
+      if (textContent) {
+        this.markTextByContent(textContent, highlightId);
+      } else {
+        // Clear the selection as final fallback
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+      }
     }
   }
 
@@ -1180,12 +1353,115 @@ Provide a concise summary that captures the key points:`;
     }, 15000);
   }
 
+  // Memory management methods
+  startMemoryCleanup() {
+    // Clear existing interval if any
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+
+    // Run cleanup every 2 minutes
+    this.cleanupInterval = setInterval(() => {
+      this.performMemoryCleanup();
+    }, 120000); // 2 minutes
+  }
+
+  performMemoryCleanup() {
+    const now = Date.now();
+
+    // Clean up expired caches
+    this.cleanupExpiredCaches(now);
+
+    // Limit cache sizes
+    this.limitCacheSizes();
+
+    // Clear old DOM references
+    this.cleanupDomReferences();
+
+    // Update memory usage tracking
+    this.memoryUsage.lastCleanup = now;
+    this.memoryUsage.cacheSize =
+      this.textNodeCache.size + this.summaryCache.size;
+
+    // Force garbage collection hint (if available)
+    if (window.gc) {
+      window.gc();
+    }
+  }
+
+  cleanupExpiredCaches(now) {
+    // Clean up expired text node caches
+    for (const [key, value] of this.textNodeCache.entries()) {
+      if (
+        value.timestamp &&
+        now - value.timestamp > this.cacheValidityDuration
+      ) {
+        this.textNodeCache.delete(key);
+      }
+    }
+
+    // Clean up expired summary caches
+    for (const [key, value] of this.summaryCache.entries()) {
+      if (value.timestamp && now - value.timestamp > 300000) {
+        // 5 minutes for summaries
+        this.summaryCache.delete(key);
+      }
+    }
+
+    // Clear old DOM cache if expired
+    if (now - this.domCache.lastCacheTime > this.cacheValidityDuration) {
+      this.domCache.body = null;
+      this.domCache.existingHighlights = null;
+    }
+  }
+
+  limitCacheSizes() {
+    // Limit text node cache size
+    if (this.textNodeCache.size > this.maxTextNodesCache) {
+      const entries = Array.from(this.textNodeCache.entries());
+      entries.sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+
+      const toDelete = entries.slice(
+        0,
+        this.textNodeCache.size - this.maxTextNodesCache
+      );
+      toDelete.forEach(([key]) => this.textNodeCache.delete(key));
+    }
+
+    // Limit summary cache size
+    if (this.summaryCache.size > this.maxSummaryCacheSize) {
+      const entries = Array.from(this.summaryCache.entries());
+      entries.sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+
+      const toDelete = entries.slice(
+        0,
+        this.summaryCache.size - this.maxSummaryCacheSize
+      );
+      toDelete.forEach(([key]) => this.summaryCache.delete(key));
+    }
+  }
+
+  cleanupDomReferences() {
+    // Clear weak references to DOM elements
+    this.savedHighlights.forEach((element, id) => {
+      if (!element || !element.parentNode) {
+        this.savedHighlights.delete(id);
+      }
+    });
+  }
+
   // Cleanup method for proper event handler and timeout cleanup
   cleanup() {
     // Clear any pending selection timeout
     if (this.selectionTimeout) {
       clearTimeout(this.selectionTimeout);
       this.selectionTimeout = null;
+    }
+
+    // Clear cleanup interval
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
     }
 
     // Remove popup if exists
@@ -1197,8 +1473,12 @@ Provide a concise summary that captures the key points:`;
     // Clear saved highlights map
     this.savedHighlights.clear();
 
-    // Clear caches
+    // Clear all caches
     this.textNodeCache.clear();
+    this.summaryCache.clear();
+    this.apiRequestQueue.clear();
+    this.configCache = null;
+
     this.domCache = {
       body: null,
       existingHighlights: null,
