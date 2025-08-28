@@ -1,6 +1,12 @@
 # Website Highlight Saver
 
-A Chrome extension that allows users to highlight and save text from any webpage with local storage and AI-powered summarization.
+A Chrome extension that allows users to highlight and save text from any webpage with local storage and AI-powered summarization. Built with a modular, performance-optimized architecture.
+
+## 🎬 Working Demo
+
+![Website Highlight Saver Demo](highlight.gif)
+
+_Watch the extension in action: Select text, save highlights, and navigate between them seamlessly._
 
 ## ✨ Features
 
@@ -15,13 +21,27 @@ A Chrome extension that allows users to highlight and save text from any webpage
 - **Cross-Page Persistence**: Highlights persist across browser sessions
 - **Responsive Design**: Works on desktop and mobile browsers
 - **Robust Text Marking**: Handles complex text selections across multiple DOM elements
+- **🔗 URL Navigation**: Navigate directly to specific highlights via URL fragments
+- **⚡ Performance Optimized**: Caching, memory management, and optimized DOM operations
+- **🛡️ Error Recovery**: Robust fallback mechanisms and error handling
+- **🧠 Smart Caching**: Intelligent caching of text nodes and AI responses
 
 ## 🚀 Installation
 
-### Method 1: Load Unpacked Extension (Development)
+1. **Download or clone this repository**
 
-1. Download or clone this repository
-2. **Configure AI (Optional)**: Create an `env.config` file in the root directory:
+2. **Create icon files** (required):
+
+   - Create 16x16, 48x48, and 128x128 pixel PNG icons
+   - Replace the placeholder files in the `icons/` folder:
+     - `icons/icon16.png`
+     - `icons/icon48.png`
+     - `icons/icon128.png`
+
+   You can use any image editor or online icon generator to create simple highlight-themed icons.
+
+3. **Configure AI (Optional)**: Create an `env.config` file in the root directory:
+
    ```
    OPENAI_API_KEY=your_openai_api_key_here
    AI_MODEL=gpt-4
@@ -29,22 +49,12 @@ A Chrome extension that allows users to highlight and save text from any webpage
    AI_TEMPERATURE=0.8
    AI_TIMEOUT=10000
    ```
-3. Open Chrome and go to `chrome://extensions/`
-4. Enable "Developer mode" in the top right
-5. Click "Load unpacked" and select the extension folder
-6. The extension icon should appear in your Chrome toolbar
 
-### Method 2: Create Icon Files
-
-Before loading the extension, you need to create icon files:
-
-1. Create 16x16, 48x48, and 128x128 pixel PNG icons
-2. Replace the placeholder files in the `icons/` folder:
-   - `icons/icon16.png`
-   - `icons/icon48.png`
-   - `icons/icon128.png`
-
-You can use any image editor or online icon generator to create simple highlight-themed icons.
+4. **Load the extension in Chrome**:
+   - Open Chrome and go to `chrome://extensions/`
+   - Enable "Developer mode" in the top right
+   - Click "Load unpacked" and select the extension folder
+   - The extension icon should appear in your Chrome toolbar
 
 ## 📖 Usage
 
@@ -73,6 +83,12 @@ You can use any image editor or online icon generator to create simple highlight
 3. **Search**: Use the search bar to filter highlights by text, domain, or title
 4. **Click to Visit**: Click any highlight to open the original webpage
 
+### Navigating to Highlights
+
+- **Direct Navigation**: Click any highlight in the popup to navigate to the original page
+- **URL Fragments**: The extension automatically scrolls to and highlights saved text when navigating via URL
+- **Visual Feedback**: Temporary highlighting shows where the text is located on the page
+
 ### Managing Highlights
 
 - **Delete**: Click the "Delete" button on any highlight to remove it
@@ -84,6 +100,7 @@ You can use any image editor or online icon generator to create simple highlight
 
 - **Saved Highlights**: Previously saved text is highlighted with a yellow background
 - **Hover Effects**: Hover over saved highlights to see additional information
+- **Navigation Feedback**: Clear visual feedback when navigating to highlights
 
 ## 📁 File Structure
 
@@ -96,8 +113,17 @@ website-highlight-saver/
 │   ├── popup.css             # Popup styling
 │   └── popup.js              # Popup functionality
 ├── content/
-│   ├── content.js            # Content script for text selection & AI
-│   └── content.css           # Content script styling
+│   ├── content.js            # Main content script orchestration
+│   ├── content.css           # Content script styling
+│   └── utils/                # Modular utility classes
+│       ├── cache-manager.js  # Caching and memory management
+│       ├── dom-utils.js      # DOM manipulation utilities
+│       ├── range-utils.js    # Text selection and range handling
+│       ├── event-utils.js    # Event handling and performance
+│       ├── ui-utils.js       # User interface management
+│       ├── storage-utils.js  # Chrome storage operations
+│       ├── ai-utils.js       # AI integration and summarization
+│       └── README.md         # Utilities documentation
 ├── background/
 │   └── background.js         # Background service worker
 ├── prompts/
@@ -113,12 +139,22 @@ website-highlight-saver/
 
 ## ⚙️ Technical Details
 
+### 🏗️ Modular Architecture
+
+The extension uses a modular utility-based architecture for better maintainability and performance:
+
+- **Main Orchestration**: `content.js` coordinates all functionality (~300 lines)
+- **Specialized Utilities**: 7 focused utility classes handle specific concerns
+- **Clean Interfaces**: Clear separation of concerns and dependencies
+- **Performance Optimized**: Shared caching, optimized DOM operations, memory management
+
 ### AI Integration
 
 - **OpenAI API**: Uses OpenAI's GPT models for text summarization
 - **Configurable**: Model, tokens, temperature, and timeout are configurable
 - **Error Handling**: Graceful fallback if AI service is unavailable
 - **Local Processing**: No data sent to external servers except OpenAI API
+- **Smart Caching**: Caches AI responses to avoid duplicate requests
 
 ### Storage Strategy
 
@@ -126,6 +162,14 @@ website-highlight-saver/
 - Stores highlights with metadata (URL, title, domain, timestamp)
 - Automatic cleanup of old highlights (keeps for 1 year)
 - Storage limit: 5MB (supports ~10,000 highlights)
+
+### Performance Features
+
+- **Text Node Caching**: Intelligent caching of DOM text nodes for faster highlighting
+- **Memory Management**: Automatic cleanup of caches and temporary data
+- **Chunk Processing**: UI-responsive processing of large highlight sets
+- **Request Deduplication**: Prevents duplicate AI requests for the same text
+- **Optimized DOM Operations**: Batch operations and efficient text finding
 
 ### Data Structure
 
@@ -146,6 +190,7 @@ website-highlight-saver/
 - `storage`: For saving highlights locally
 - `activeTab`: For accessing current tab information
 - `scripting`: For injecting content scripts
+- `tabs`: For tab management and navigation
 - `<all_urls>`: For working on any website
 
 ## 🎨 UI/UX Features
@@ -164,6 +209,14 @@ website-highlight-saver/
 - **Success/Error Messages**: Clear feedback for all actions
 - **Auto-close**: Popups automatically close after appropriate delays
 - **Hover Effects**: Interactive button states with subtle animations
+- **Navigation Feedback**: Visual indicators when navigating to highlights
+
+### Error Recovery
+
+- **Fallback Mechanisms**: Multiple strategies for text finding and highlighting
+- **Graceful Degradation**: Extension continues working even if some features fail
+- **User Feedback**: Clear error messages and status indicators
+- **Automatic Retry**: Smart retry logic for failed operations
 
 ## 🌐 Browser Compatibility
 
@@ -201,19 +254,6 @@ To enable AI summarization:
    ```
 3. Reload the extension
 
-## 🔮 Future Enhancements
-
-- [x] AI-powered summarization using OpenAI API
-- [ ] Highlight categories and tags
-- [ ] Keyboard shortcuts
-- [ ] Cloud sync across devices
-- [ ] Highlight sharing
-- [ ] Advanced search filters
-- [ ] Highlight annotations
-- [ ] Dark mode support
-- [ ] Multiple AI providers
-- [ ] Custom prompt templates
-
 ## 🤝 Contributing
 
 1. Fork the repository
@@ -229,14 +269,5 @@ This project is open source and available under the MIT License.
 ## 🆘 Support
 
 If you encounter any issues or have feature requests, please create an issue in the repository.
-
-## 🔒 Privacy
-
-- **Local Storage**: All highlights are stored locally in your browser
-- **AI Processing**: Only selected text is sent to OpenAI for summarization
-- **No Tracking**: No analytics or tracking data is collected
-- **Open Source**: Full transparency of all code and functionality
-
----
 
 **Note**: This extension stores all data locally in your browser. Only text sent for AI summarization is transmitted to OpenAI's servers.
